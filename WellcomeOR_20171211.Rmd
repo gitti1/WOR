@@ -1,0 +1,656 @@
+---
+title: "Wellcome Open Research"
+subtitle: "An exploration based on year one data"
+author: "Birgit Schmidt"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+#output: html_document
+output:
+  html_document:
+    df_print: paged
+    keep_md: yes
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, echo = FALSE, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rcrossref)
+library(lubridate)
+library(gender)
+library(genderizeR)
+library(genderdata)
+library(slam) # used by genderizeR
+library(europepmc)
+library(rvest) # for web scraping
+library(stringr) # string manipulation
+```
+
+## Introduction
+We investigate the publication metadata and related events on the Wellcome Open Research (WOR) publication platform, and consider all 192 publications which have been submitted between 17 October 2016 and 17 November 2017. The exploration is based on the following datasets:
+
+* WOR publication data retrieved from Figshare on 28 November 2017 (Kiley, 2017b).
+
+* Additional bibliographic information and event data from CrossRef and altmetrics data from altmetrics.com retrieved on 28 November 2018 (Jahn, 2017b). 
+
+* Data on F1000Research and WOR review reports and their status parsed from Europe PubMed Central on 10 January 2018 (Jahn, 2018). 
+
+For a summary on key aspects of the WOR dataset also compare Kiley (2017a). Our analysis offers some additional insights.
+
+```{r load and combine data, cache = TRUE, echo = FALSE, warning = FALSE}
+WOR <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/WOR_publication_data_Oct16-Nov17.csv", header = TRUE, sep = ",")
+WOR_doi <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/wellcome_doi.csv", header = TRUE, sep = ",")
+WOR_event <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/wellcome_event.csv", header = TRUE, sep = ",")
+WOR_altm <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/altmetrics_wellcome.csv", header = TRUE, sep = ",")
+
+# retrieve CrossRef dataset
+wellcome_df <- rcrossref::cr_works(filter = c(issn = "2398-502X"), limit = 1000) %>% .$data
+
+WOR <- rename(WOR, URL = Article.URL)
+# add dois
+WOR_tt <- WOR %>% left_join(WOR_doi)
+
+# reference dataset: amend WOR dataset, join with the CrossRef dataset 
+WOR_new <- WOR_tt %>% left_join(wellcome_df, by = c("doi" = "DOI"))
+
+# plot variable names for reference
+#names(WOR_new)
+
+# explore versions of articles 
+tver <- table(WOR_new$Version.Number)
+#tver
+# from this table one would conclude that there are 142 unique publications, however, there are 144 unique titles (which could be a small change, see the findmatch function below which should find fuzzy matches)
+
+# check if every paper has a version 1 
+pv1 <- WOR_new %>% filter(Version.Number == 1)
+pv2 <- WOR_new %>% filter(Version.Number == 2)
+pv3 <- WOR_new %>% filter(Version.Number == 3)
+# two papers have a version 2 but the list does not seem to contain version 1
+#pv2$title %in% pv1$title
+#pv3$title %in% pv2$title
+
+# add variable to select the papers
+#WOR_new$v <- ifelse(WOR_new$title %in% pv1$title, TRUE, FALSE)
+WOR_new <- WOR_new %>% mutate(v = ifelse(title %in% pv1$title, TRUE, FALSE))
+# there are two papers with only version 2 but no version 1
+#WOR_new %>% filter(v == FALSE) %>% select(Article.Type, Version.Number, doi)
+
+# however there are matches 
+#WOR_new %>% filter(doi %in% c("10.12688/wellcomeopenres.10784.2", "10.12688/wellcomeopenres.10784.1")) %>% select(doi, Version.Number, title)
+#WOR_new %>% filter(doi %in% c("10.12688/wellcomeopenres.11190.2", "10.12688/wellcomeopenres.11190.1")) %>% select(doi, Version.Number, title)
+#WOR_new %>% filter(doi %in% c("10.12688/wellcomeopenres.11635.2", "10.12688/wellcomeopenres.11635.1")) %>% select(doi, Version.Number, title)
+
+```
+
+## Submissions 
+In this section we consider submission rates over time.
+
+```{r, echo=FALSE, warning = FALSE}
+# submission date - range
+#WOR %>% mutate(Submission.date = lubridate::parse_date_time(Submission.date, c('y', 'dmy', 'my'))) %>% summarise(min(Submission.date), max(Submission.date))
+
+# submissions by date 
+# between 0 and 3 subs per day, no strong pattern, no peaks of submissions
+WOR %>%
+  mutate(Submission.date, Submission.date = lubridate::parse_date_time(Submission.date, c('y', 'dmy', 'my'))) %>%
+  ggplot(aes(Submission.date)) + geom_bar() + 
+  labs(title = "Submissions Oct 2016 - Oct 2017", 
+       x = "Publication date", 
+       y = "Number of submissions")
+
+# submission by day of week
+# cf H Wickham, p. 384 f
+# not so interesting as the number of submissions by day is very small
+daily <- WOR %>% mutate(date = as.Date(Submission.date, "%d/%m/%Y")) %>% group_by(date) %>% summarize(n = n())
+avg_subm <- daily %>% summarise(mean(n))
+avg_subm <- as.numeric(avg_subm)
+sd_subm <- daily %>% summarise(sd(n))
+sd_subm <- as.numeric(sd_subm)
+
+daily <- daily %>% mutate(wday = wday(date, label = TRUE))
+
+ggplot(daily, aes(wday, n)) + labs(title = "Submissions by day of week", x = "Week day", y = "Number of submissions") + geom_boxplot(outlier.shape=NA) + geom_jitter(shape=16, width = 0.05, height = 0.05, alpha = 0.7)
+
+# geom_jitter(shape=16, position=position_jitter(0.05))
+
+# number of submissions and their average per week day
+daily %>% group_by(wday) %>% summarize(submissions = sum(n), mean = round(mean(n), 2))
+```
+
+Overall, `r nrow(WOR_new)` submissions were received between 17 October 2016 and 17 November 2017. On average `r round(avg_subm, 2)` submissions were received per day (sd = `r round(sd_subm, 2)`), including all versions of the papers -- i.e. about 4 papers every 3 days. No strong patterns could be observed. In absolute terms, the highest number of submissions was received on Tuesdays and the lowest on Saturdays. 
+
+## Article versions and types, references by article type
+```{r article types & references, cache = TRUE, echo = FALSE, warning = FALSE}
+# article versions
+#table(WOR_new$Version.Number)
+WOR_new %>% group_by(Version.Number) %>% summarize(n = n())
+
+# article types
+art_types <- WOR_new %>% filter(Version.Number == 1) %>% group_by(Article.Type) %>% summarize(n = n(), perc = round(n / 142 * 100, 2)) %>% arrange(desc(n))
+art_types <- as.data.frame(art_types)
+
+# number of references by article type (only those with at least one reference)
+WOR_new <- WOR_new %>% mutate(reference.count =  as.numeric(reference.count))
+
+WOR_new %>% filter(Version.Number == 1 & reference.count > 0) %>%   group_by(Article.Type) %>% summarize(n = n(), min = min(reference.count), max = max(reference.count), mean = round(mean(reference.count, na.rm = TRUE), 2), sd = round(sd(reference.count), 2)) %>% arrange(desc(n)) 
+
+# papers with reference count equal to zero (likely just missing information)
+noreferences <- WOR_new %>% filter(reference.count == 0) %>% select(Article.Type, reference.count) %>% group_by(Article.Type) %>% summarise(n = n()) %>% arrange(desc(n)) 
+noref <- noreferences %>% summarize(m = sum(n))
+```
+
+Several article types can be published on Wellcome Open Research. So far about 3 out of 5 of all articles are research articles (`r art_types[1, 2]` articles, `r art_types[1, 3]`%), followed by method articles (`r art_types[2, 2]` articles, `r art_types[2, 3]`%), study protocols (`r art_types[3, 2]` articles, `r art_types[3, 3]`%), and several smaller categories.
+
+Of the `r tver[1]` papers published on Wellcome Open Research by end of November 2017, `r tver[1] - tver[2]` papers have only one version, `r tver[2]` have two versions and `r tver[3]` papers have three versions. 
+
+The rate of papers with only one version seems to be rather high. This might be partially due to the fact that for some papers the review-revise process has not been closed. However, the high rate may also be due to the fact that post-publication review is applied, i.e. the paper is already published when the reviews come in and therefore the motivation to revise the paper is lower than in pre-publication review processes. In addition, a higher rate of revisions can be expected if review reports recommend revisions or do not approve the given version of the paper.  
+
+## Number of authors & gender 
+```{r author information, cache = TRUE, echo = FALSE, warning = FALSE}
+# unnest author information - based on version 1 of the papers 
+WOR_nn <- WOR_new %>% filter(Version.Number == 1) %>% unnest(author)
+# compute number of authors per paper
+authors_per_paper <- WOR_nn %>% group_by(doi) %>% summarise(nauthors = n()) 
+authors_per_paper %>% summarise(min = min(nauthors), max = max(nauthors), mean = round(mean(nauthors), 2), sd = round(sd(nauthors), 2))
+
+# authors of the papers (version 1 only)
+nauthors <- length(na.omit(WOR_nn$family))
+papers <- WOR_nn %>% filter(!is.na(family))
+npa <- length(unique(papers$doi))
+
+# consortia papers
+consortia <- WOR_nn %>% select(name) %>% unique()
+ncon <- nrow(na.omit(consortia))
+papers_con <- WOR_nn %>% select(doi, name) %>% filter(!is.na(name))
+mcon <- length(unique(papers_con$doi))
+
+# investigate gender based on the R gender package
+# apply gender function - note that this does not  work if there are additional initials etc. 
+gender(na.omit(WOR_nn$given))
+
+# filter out NAs in given name
+WOR_given <- WOR_nn %>% filter(!is.na(given) & Version.Number == 1)
+# split multiple given names 
+WOR_given$given_1 <- sapply(WOR_given$given, strsplit, " ", 1)
+
+# unnest writes the information on additional initials/names into extra rows
+#WOR_given <- WOR_given %>% unnest(given_1)
+
+# add a variable for the first given names
+WOR_given$given_first <- sapply(WOR_given$given_1, function(x) x[1])
+WOR_given$given_first <- sapply(WOR_given$given_first, strsplit, "-", 1)
+WOR_given$given_first <- sapply(WOR_given$given_first, function(x) x[1])
+
+WOR_gender <- gender(WOR_given$given_first)
+# result of gender classification - first name, prop_male, prop_fem, etc.
+#WOR_gender %>% group_by(gender) %>% summarise(n())
+
+# number of female authors, use only version 1 of the paper
+WOR_fem <- WOR_gender %>% filter(gender == "female")
+nfem <- dim(WOR_fem)[1]
+
+# number of distinct female names 
+namesfem <- length(unique(WOR_fem$name))
+
+# identify gender of first author
+WOR_first_author <- WOR_given %>% group_by(doi) %>% filter(row_number(doi) <= 1)
+# assign gender
+first_smr <- gender(WOR_first_author$given_first) %>% group_by(gender) %>% summarize(n = n())
+first_smr_df <- as.data.frame(first_smr)
+
+## Dropped as this does not lead to further insight - gender offers the method which is applied by the genderizeR package
+# investigate gender via the genderizeR package
+# https://cran.r-project.org/web/packages/genderizeR/genderizeR.pdf
+# can be applied to text strings, outcome is a data table
+# genderize.io database allows only 1000 queries within 24 hours
+
+#givenNames <- findGivenNames(WOR_given$given_first)
+#dim(givenNames) 
+# 550 observations of 4 variables
+# ie 550 out of 1110 given names have been identified as female / male - lower rate that with the R gender package
+#genderize(WOR_given$given_first, genderDB = givenNames) 
+
+# join the gender information with the WOR_first_author dataset
+# only use the unique/distinct rows (92 in total)
+WOR_fa_gender <- gender(WOR_first_author$given_first) %>% select(name, gender) %>% distinct()
+# join with first author dataset
+WOR_first_author <- left_join(WOR_first_author, WOR_fa_gender, by = c("given_first" = "name"))
+
+# list unclassified names
+#WOR_first_author %>% filter(is.na(gender)) %>% select(doi, given, family)
+
+# add missing gender information manually
+# through Baby Name Guesser (http://www.gpeters.com/names/baby-names.php) and/or institutional/personal websites
+# Zhuo used for both sexes - f verified through web page (ResearchGate)
+WOR_first_author_man <- WOR_first_author %>% mutate(gender = ifelse(given_first == "Zhuo", "female", gender))
+# Przemyslaw - baby names database
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Przemyslaw", "male", gender))
+# "Mar\u00eda" - website
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Mar\u00eda", "female", gender))
+# Rousseau
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Rousseau", "male", gender))
+# Xiaolei - used for both sexes - female - instn website
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Xiaolei", "female", gender))
+# "Cl\u00e9mentine" - female
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Cl\u00e9mentine", "female", gender))
+# Meliti - male
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Meliti", "male", gender))
+# "M\u00e1ire" - female - instn website
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "M\u00e1ire", "female", gender))
+# Nayreen - female - website
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Nayreen", "female", gender))
+# Heiman - male
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Heiman", "male", gender))
+# Ladda - female
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Ladda", "female", gender))
+# Germana - female
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Germana", "female", gender))
+# Kebede - male
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Kebede", "male", gender))
+# Madapura - male - via instn website
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Madapura", "male", gender))
+# Edwine - female
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Edwine", "female", gender))
+# Tewodros - male
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Tewodros", "male", gender))
+# Halfan - male
+WOR_first_author_man <- WOR_first_author_man %>% mutate(gender = ifelse(given_first == "Halfan", "male", gender))
+
+# summarise gender distribution
+#' gender distr - automatic classification
+tab_acl <- table(WOR_first_author$gender)
+#' gender distr - manually amended
+tab_fagm <- table(WOR_first_author_man$gender)
+#tab_fagm
+
+```
+
+Overall, `r nauthors` authors have been involved in the writing of `r npa` publications. In addition, `r ncon` consortia contributed to the writing of `r mcon` papers. On average, about 8 authors were involved in each paper (mean = 7.87, sd = 5.51, min = 1, max = 31). 
+
+We classified authors by gender based on their first given name. The approximation was based on the R gender package (version 0.5.1), applying the "ssa" method which looks up names based on the U.S. Social Security Administration baby name data. All other available methods resulted in a lower rate of classified given names. E.g. the "ssa" method leads to `r nrow(WOR_gender)` classified names while the "genderize" method leads to 550 out of 1110 classified names. 
+
+Of these authors, `r nfem` individuals have been identified as female, i.e. about `r round(nfem/nauthors * 100, 2)` percent of those `r nrow(WOR_gender)` authors (`r round(nrow(WOR_gender)/nauthors * 100, 2)` 
+%, n = `r nauthors`) which could be classified. 
+
+Overall, the number of women acting as first author was somewhat higher than the overall share of women involved in writing the papers. About every second first author is female: `r first_smr_df[1, 2]` out of `r sum(first_smr_df[ , 2])` (`r round(first_smr_df[1, 2] / sum(first_smr_df[ , 2]) * 100, 2)`%) papers have a female author as first author (where `r round(sum(first_smr_df[ , 2]) / nrow(WOR_first_author) * 100, 2)`% of all first authors were classified by gender).  
+
+In addition, we manually classified the names which have not been covered by the classification algorithm through a baby names database and the inspection of institutional/personal websites. This resulted in `r tab_fagm[1]` female out of `r sum(tab_fagm)` first authors (`r round(tab_fagm[1]/sum(tab_fagm) * 100, 2)`%), i.e. a share very close to the figure we found above. 
+
+It must be noted that the corresponding author and the first author are not necessarily the same. In the above we have given precedence to first authorship.  
+
+
+## Duration between publication events
+We consider the time from submission to publication, author revision, peer review and indexing.
+
+```{r dates, echo=FALSE, warning = FALSE}
+# compute time from submission to first and final review report
+# average time 
+# work with WOR_new
+
+WOR_dates <- WOR_new %>% mutate(Submission.date = as.Date(Submission.date, "%d/%m/%Y"), Published = as.Date(Published, "%d/%m/%Y"), Referee.Report.1 = as.Date(Referee.Report.1, "%d/%m/%Y"), Referee.Report.2 = as.Date(Referee.Report.2, "%d/%m/%Y"), Referee.Report.3 = as.Date(Referee.Report.3, "%d/%m/%Y"), Referee.Report.4 = as.Date(Referee.Report.4, "%d/%m/%Y"), Author.Revisions.Received = as.Date(Author.Revisions.Received, "%d/%m/%Y"),
+Indexed = as.Date(Indexed, "%d/%m/%Y"))
+
+# time differences for steps in publication process - only for first version
+WOR_pp <- WOR_dates %>% filter(Version.Number == 1) %>% select(doi, Article.Type, Submission.date, Published, Referee.Report.1:Referee.Report.4, Author.Revisions.Received, Indexed) %>% mutate(sub_to_pub = Published - Submission.date, sub_to_frev = Referee.Report.1 - Submission.date, sub_to_srev = Referee.Report.2 - Submission.date, sub_to_arev = Author.Revisions.Received - Submission.date, sub_to_ind = Indexed - Submission.date)
+
+# summarize duration by article type
+WOR_pp %>% group_by(Article.Type) %>% summarize(n = n(), msubpub = round(median(sub_to_pub, na.rm = TRUE), 2), msubfrev = round(median(sub_to_frev, na.rm = TRUE), 2), msubsrev = round(median(sub_to_srev, na.rm = TRUE), 2), msubarev =  round(median(sub_to_arev, na.rm = TRUE), 2), msubind = round(median(sub_to_ind, na.rm = TRUE), 2)) %>% arrange(desc(n)) 
+
+# time from submission to first review - by article type
+#WOR_pp %>% filter(Article.Type %in% c("RESEARCH_ARTICLE", "METHOD_ARTICLE", "STUDY_PROTOCOL", "RESEARCH_NOTE", "SOFTWARE_TOOLS")) %>% ggplot(aes(Article.Type, sub_to_frev)) + geom_boxplot() + labs(title = "Time from submission to first review by article type", x = "Article type", y = "Days") + coord_flip()
+
+# dto - with data points
+WOR_pp %>% filter(Article.Type %in% c("RESEARCH_ARTICLE", "METHOD_ARTICLE", "STUDY_PROTOCOL", "RESEARCH_NOTE", "SOFTWARE_TOOLS")) %>% 
+  ggplot(aes(Article.Type, sub_to_frev)) + geom_boxplot(outlier.shape=NA) +
+  labs(title = "Time from submission to first review by article type", x = "Article type", y = "Days") + coord_flip() + geom_jitter(shape=16, position=position_jitter(0.1))
+
+# time form submission to indexing
+WOR_pp %>% filter(Article.Type %in% c("RESEARCH_ARTICLE", "METHOD_ARTICLE", "STUDY_PROTOCOL", "RESEARCH_NOTE", "SOFTWARE_TOOLS")) %>% 
+  ggplot(aes(Article.Type, sub_to_ind)) + geom_boxplot(outlier.shape=NA) +
+  labs(title = "Time from submission to indexing by article type", x = "Article type", y = "Days") + coord_flip() + geom_jitter(shape=16, position=position_jitter(0.1))
+
+### add gender to the WOR_pp dataset
+gender_fam <- WOR_first_author_man %>% select(doi, gender)
+WOR_pp <- WOR_pp %>% left_join(gender_fam)
+
+# summarize duration differences by gender
+WOR_pp %>% group_by(gender) %>% summarize(n = n(), msubpub = round(median(sub_to_pub, na.rm = TRUE), 2), msubfrev = round(median(sub_to_frev, na.rm = TRUE), 2), msubsrev = round(median(sub_to_srev, na.rm = TRUE), 2), msubarev =  round(median(sub_to_arev, na.rm = TRUE), 2), msubind = round(median(sub_to_ind, na.rm = TRUE), 2)) %>% arrange(desc(n)) 
+
+# time from submission to first review - by gender 
+WOR_pp %>%
+  ggplot(aes(gender, sub_to_frev)) + geom_boxplot(outlier.shape=NA) +
+  labs(title = "Time from submission to first review by gender", x = "Gender", y = "Days") + coord_flip() + geom_jitter(shape=16, position=position_jitter(0.05))
+
+
+# Investigate review status
+# variable Referee.Status (compare README file)
+# This field describes the different referee statuses an article has received;
+# A = Approved, AR = Approved with Reservations, NA = Not approved.
+
+# Q: How large is the share for each status across all versions of the article?
+# issue: status is not provided for all versions, typically available for the last but not necessary for all former reports
+# the same data is provided for earlier versions!!
+refstatus <- WOR_new %>% select(doi, Referee.Status)
+#head(refstatus)
+
+# investigate the status within a sample
+#sample25 <- tibble(doi = sample(WOR_doi$doi, 25))
+#write_csv(sample25, "/Users/bschmidt/Dropbox/data/WellcomeOR/WOR_doi_sample25.csv")
+#sample25 <- read.csv("/Users/bschmidt/Dropbox/data/WellcomeOR/WOR_doi_sample25.csv")
+
+# sample data, manual collection of data
+sample25_man <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/WOR_doi_sample25_man.csv", sep=";", na.strings = c("", " "))
+sample25_man <- as.tibble(sample25_man)
+
+# gather the two sets of variables, extract and spread back into columns
+# compare https://stackoverflow.com/questions/25925556/gather-multiple-sets-of-columns
+sample25_man_gathered <- sample25_man %>% gather(key, value, -doi) %>% extract(key, c("question", "version"), "([:alpha:]+)([:digit:])") %>% spread(question, value) %>% filter(!is.na(Rep))
+
+# summary of review status
+tabstatus <- table(sample25_man_gathered$Rep)
+
+# summary of views per article
+mviews <- sample25_man_gathered  %>% summarize(mean = mean(as.numeric(Views), na.rm = TRUE))
+mviews <- round(as.numeric(mviews), 2)
+
+# Draw a F1000Research sample of publications from November 2016 
+# issn 2046-1402
+#' get DOIs per ISSN
+#F1000R_df <- rcrossref::cr_works(filter = c(issn = "2046-1402", from_pub_date = '2016-11-01'), limit = 1000) %>% .$data
+#' prepare unnest
+#names(F1000R_df$link) <- F1000R_df$DOI
+#' unnest, remove unneded string, and export data
+#F1000R_dois <- dplyr::bind_rows(F1000R_df$link, .id = "doi") %>% 
+#  mutate(URL = gsub("/iparadigms", "", URL)) %>% 
+#  select(1:2)
+#readr::write_csv(F1000R_dois, "/Users/bschmidt/Dropbox/data/WellcomeOR/F1000R.csv")
+#F1000R_dois <- read_csv("/Users/bschmidt/Dropbox/data/WellcomeOR/F1000R.csv")
+#sdoi25 <- sample(F1000R_dois$doi, 25)
+#sampleFR25 <- F1000R_dois %>% filter(doi %in% sdoi25)
+#readr::write_csv(sampleFR25, "/Users/bschmidt/Dropbox/data/WellcomeOR/sampleF1000R25.csv")
+# add a few more as there are a lot of review papers in the sample
+#sdoi10 <- sample(F1000R_dois$doi, 10)
+#sampleFR10 <- F1000R_dois %>% filter(doi %in% sdoi10)
+#readr::write_csv(sampleFR10, "/Users/bschmidt/Dropbox/data/WellcomeOR/sampleF1000R10.csv")
+
+# result renamed to sampleFR35_man.csv
+sampleFR35_man <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/sampleFR35_man.csv", sep=";", na.strings = c("", " "))
+sampleFR35_man <- as.tibble(sampleFR35_man)
+
+# leave out the REVIEW papers, sample size is now 28
+#sampleFR35_man_gathered  <- sampleFR35_man %>% filter(!type == "REVIEW") %>% gather(report, status, -Views1, -Views2, -Views3, -Views4, -Views5, -Views6, -doi, -URL, -type, -reviewed) 
+
+# gather by the two sets of variables, extract and then spread again
+sampleFR35_man_gathered <- sampleFR35_man %>% gather(key, value, -doi, -reviewed, -URL, -type) %>% extract(key, c("question", "version"), "([:alpha:]+)([:digit:])") %>% spread(question, value) %>% filter(!is.na(Rep), is.na(type))
+
+# summary of review status
+FRtabstatus <- table(sampleFR35_man_gathered$Rep)
+
+# summary of views per article
+mFRviews <- sampleFR35_man_gathered  %>% summarize(mean = mean(as.numeric(Views), na.rm = TRUE))
+mFRviews <- round(as.numeric(mFRviews), 2)
+
+
+## For comparison draw a sample from PeerJ
+# issn 2167-8359
+#' get DOIs per ISSN
+#PeerJ_df <- rcrossref::cr_works(filter = c(issn = "2167-8359", from_pub_date = '2016-11-01'), limit = 1000) %>% .$data
+#' prepare unnest
+#names(PeerJ_df$link) <- PeerJ_df$DOI
+#' unnest, remove unneded string, and export data
+#PeerJ_dois <- dplyr::bind_rows(PeerJ_df$link, .id = "doi") %>% 
+#  mutate(URL = gsub("/iparadigms", "", URL)) %>% 
+#  select(1:2)
+#readr::write_csv(PeerJ_dois, "/Users/bschmidt/Dropbox/data/WellcomeOR/PeerJ.csv")
+#PeerJ_dois <- read_csv("/Users/bschmidt/Dropbox/data/WellcomeOR/PeerJ.csv")
+#doiPJ25 <- sample(PeerJ_dois$doi, 25)
+#samplePJ25 <- PeerJ_dois %>% filter(doi %in% doiPJ25)
+#readr::write_csv(sampleFR25, "/Users/bschmidt/Dropbox/data/WellcomeOR/samplePeerJ25.csv")
+
+
+```
+
+There was some variation by article type in how much time it took from submission to publication, receiving reviews and finally indexing. Some publication events are not available for all articles, e.g. author revisions are optional. For this analysis we restrict ourselves to the first version of the article (i.e. 142 out of 192 articles). Some article types were published somewhat faster compared to the median time of 25 days from submission to publication for research articles, e.g. systematic reviews and data notes (13 resp. 14 days). 
+
+For research articles the first review was typically received within about 43 days, and the second review within another 12 days. Indexing was accomplished by day 65. The time until receiving the first review was somewhat longer for study protocols (median = 57 days), and shortest for open letters and data notes (22 resp. 28 days). 
+
+When looking at differences by gender of the first author it seems that the duration between events was on average a bit longer for male first authors. The time from submission to receiving the author revisions took 7 vs. 8 days, 21 vs. 27 days until publication of the first version, 40.5 vs. 41 days until receiving the first review, 49 vs. 55 days until receiving the second review (if there was any) and finally 63 vs. 62 days until indexing for female vs. male first authors (all values based on the median). 
+
+If we assume that the start of the review period only depends on the submission date we can conclude that reviewers did not seem to differentiate by the gender of the first author. However, if the review only started when the first version was published reviewers took about 5.5 more days to review papers of female first authors (19.5 vs. 14 days for female vs. male first authors). However, this time difference seems rather small compared to a strong gender bias which has been observed by a recent study based on economic journals: all-female-authored papers remained half a year longer in peer review compared to all-male-authored papers (Hengel, 2017). In her study Hengel expressed the hope that in open peer review settings such biases may level out, in any case, they could be scrutinized by the public. 
+
+We did not further investigate the review status based on the dataset as published on Figshare as the information is incomplete. The review status seems to be provided for the most recent version of the paper but is not fully recorded for former versions. 
+
+Instead we investigated a random small sample of 25 papers for which information was gathered manually. For these papers the mean number of views per review report was `r mviews`. Across these papers about every second review report was either "approved" or "approved with reservations" (`r tabstatus[1]` each, out of `r sum(tabstatus)` reports, `r round(tabstatus[1]/sum(tabstatus) *100, 2)`%) while only a small number of reports resulted in "not approved" (`r tabstatus[3]` reports, `r round(tabstatus[3]/sum(tabstatus) *100, 2)`%). 
+
+This rate of positive reviews ("approved" and "approved with reservations") seems to be rather high, both in comparison to F1000Research and medical journals. Vines (2013) observed (based on samples of 100 resp. 25 papers) that F1000 Research has a strong rate of positive reviews (84%, 21 out of a sample of 25 papers) compared to medical journals (42%, 42 out of a sample of 100 papers). 
+
+Based on a random sample of 35 papers in F1000Research which have been published since 1 November 2016 we tested Vines finding. Of these, 7 papers were review papers and therefore excluded (review papers are subject to peer review but the review reports are not published). All `r sum(FRtabstatus)` review reports related to these resulting 28 papers were positive: 2 out of 3 approved and (`r FRtabstatus[1]` reviews) and one third approved with reservations (`r FRtabstatus[2]` reviews). In our sample the rate of non-positive reviews was therefore zero. 
+
+## Altmetrics 
+We investigate the uptake of article versions on social media, based on data retrieved from altmetrics.com, e.g. the number of Twitter postings and Mendeley bookmarks -- by article version and accumulated (averages based on median).  
+
+```{r altmetrics, echo=FALSE, warning = FALSE, cache = TRUE}
+altmetrics <- WOR_altm %>% select(doi, cited_by_posts_count, readers.citeulike, readers.mendeley, readers.connotea, readers_count, cited_by_gplus_count, cited_by_peer_review_sites_count, pmid, pmc)
+
+# amend data by altmetrics data
+WOR_new2 <- WOR_new %>% left_join(altmetrics)
+
+# version 1 altmetrics uptake - median
+WOR_new2 %>% group_by(Article.Type) %>% filter(Version.Number == 1) %>% summarize(n = n(), twitter_posts = sum(cited_by_posts_count, na.rm = TRUE), mtwit = round(median(cited_by_posts_count, na.rm =TRUE), 1), m75t = round(quantile(cited_by_posts_count, c(.75), na.rm = TRUE), 1), maxt = max(cited_by_posts_count, na.rm = TRUE), mendeley = sum(readers.mendeley, na.rm = TRUE), mmend = round(median(readers.mendeley, na.rm =TRUE), 1), citeulike = sum(readers.citeulike, na.rm = TRUE))
+
+# version 2 altmetrics uptake
+WOR_new2 %>% group_by(Article.Type) %>% filter(Version.Number == 2) %>% summarize(n = n(), twitter_posts = sum(cited_by_posts_count, na.rm = TRUE),  mendeley = sum(readers.mendeley, na.rm = TRUE), citeulike = sum(readers.citeulike, na.rm = TRUE))
+
+# version 3 altmetrics uptake
+WOR_new2 %>% group_by(Article.Type) %>% filter(Version.Number == 3) %>% summarize(n = n(), twitter_posts = sum(cited_by_posts_count, na.rm = TRUE),  mendeley = sum(readers.mendeley, na.rm = TRUE), citeulike = sum(readers.citeulike, na.rm = TRUE))
+
+# aggregate social media uptake across all versions
+x <- unique(WOR_new2$title) 
+# length is 144 - ie there is one publication for which the title was slightly changed in a later version??
+# try to find matching entries 
+findmatch <- function(x){
+  for (i in 1:length(x)){
+    if(length(agrep(x[i], x[i+1:length(x)])) > 0){
+     print(agrep(x[i], x[i+1:length(x)]))
+      }
+    }
+}
+# function does not find any fuzzy matches, ie 144 unique titles
+findmatch(x)
+
+# uptake across all versions
+WOR_new2 %>% group_by(Article.Type) %>% summarize(twitter_posts = sum(cited_by_posts_count, na.rm = TRUE), citeulike = sum(readers.citeulike, na.rm = TRUE), mendeley = sum(readers.mendeley, na.rm = TRUE))
+
+# plot uptake on Twitter
+WOR_new2 %>% filter(Version.Number == 1) %>% 
+  ggplot(aes(Article.Type, cited_by_posts_count)) + 
+  labs(title = "Twitter postings (on first version only)", x = "Article type", y = "Count") + coord_flip() + geom_boxplot(outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1))
+
+# plot uptake on Mendeley
+WOR_new2 %>% filter(Version.Number == 1) %>% 
+  ggplot(aes(Article.Type, readers.mendeley)) + 
+  labs(title = "Mendeley readers (of first version only)", x = "Article type", y = "Count") + coord_flip() + geom_boxplot(outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1))
+```
+
+As expected, the majority of altmetrics impacts can be observed on the first version of the articles, with highest uptake on Twitter and Mendeley. The uptake on other social bookmarking services was rather low and is therefore not further considered (CiteULike, Connotea). For every second of all research articles the number of tweets was up to 9 tweets, for about 3/4 of the data it was less than 20 tweets, and a few articles performed much better with up to 206 tweets.  
+
+## Availability in Europe PMC
+```{r europepmc, echo=FALSE, warning = FALSE, cache = TRUE, message= FALSE}
+# based on altmetrics.com data - see altmetrics section 
+npmid <- length(unique(WOR_new2$pmid))
+npmc <- length(unique(WOR_new2$pmc))
+
+# based on search in Europe PMC
+# compare: https://ropensci.github.io/europepmc/articles/introducing-europepmc.html
+#library(europepmc)
+my_dois <- WOR_new$doi
+my_epmc <- plyr::ldply(my_dois, function(x) {
+  europepmc::epmc_search(paste0("DOI:", x))
+  })
+#write_csv(my_epmc, "/Users/bschmidt/Dropbox/data/WellcomeOR/WOR_my_epmc.csv")
+dim(my_epmc)
+npmc_rev <- nrow(my_epmc)
+
+```
+
+```{r citations, echo=FALSE, warning = FALSE, cache = TRUE}
+# citations received for papers on Europe PMC (only citations within the database)
+my_epmc %>% ggplot(aes(citedByCount)) + 
+  geom_bar() + 
+  labs(title = "Citations received (based on Europe PMC data)", x = "Number of citations", y = "Count")
+
+cit_tab <- table(my_epmc$citedByCount)
+cit_tab
+
+# look up citations based on CrossRef data
+# introduce new variable - throws error (illegal characters in URL)
+# intro of new variable 
+#WOR_new <- WOR_new %>% mutate(doi = str_replace_all(doi, fixed(" "), ""))
+#WOR_new <- WOR_new %>% mutate(citations = cr_citation_count(doi))
+
+dois <- WOR_new$doi # or dois <- WOR_new %>% .$doi
+  
+cr_cites <- function(doi) {
+  tt <- rcrossref::cr_works_(doi) %>% 
+    jsonlite::fromJSON() %>% 
+    .$message
+  data_frame(doi, `is-referenced-by-count` = tt$`is-referenced-by-count`)
+}
+
+my_response <- purrr::map(dois, purrr::safely(cr_cites))
+my_df <- purrr::map_df(my_response, "result")
+
+my_df <- dplyr::rename(my_df, citations_cr = "is-referenced-by-count")
+
+WOR_new <- WOR_new %>% left_join(my_df)
+cit_epmc <- my_epmc %>% select(doi, citedByCount)
+WOR_new <- WOR_new %>% left_join(cit_epmc)
+
+# comparison of citations Europe PMC vs. CrossRef data (CrossRef identified much less citations!)
+#table(WOR_new$citedByCount, useNA = "ifany")
+#table(WOR_new$citations_cr, useNA = "ifany")
+
+```
+
+According to altmetric.com data `r npmid ` out of 142 published articles have received a PubMed ID while `r npmc` articles have been deposited in PubMed Central (data retrieved on 28 November 2017 via the rAltmetric package) (Ram, 2017). 
+
+However, a direct search based on all 192 DOIs in Europe PMC via the R europepmc package resulted in `r npmc_rev` unique records (as of 2 January 2018). For this result it must be noted that Europe PMC links older versions to newer versions and a search for the DOI of an older version leads to an empty search result via the RESTFUL API. For more details on the R europepmc package compare Jahn & Salmon (2017) and Jahn (2017a). 
+
+According to Europe PMC so far 3 out of 4 of these papers do not have received any citation (`r cit_tab[1]` papers, `r round(cit_tab[1]/sum(cit_tab)*100, 2)`%) while `r cit_tab[2]` papers have received one citation (`r round(cit_tab[2]/sum(cit_tab)*100, 2)`%) and `r cit_tab[3]` papers have received two citations (`r round(cit_tab[3]/sum(cit_tab)*100, 2)`%) and four papers have received more than three citations.
+
+## Review ratings
+In this section we compare the review ratings of all papers on WOR compared to papers published on F1000Research.
+```{r F1000 reviews, echo=FALSE, warning = FALSE}
+F1000_reviews <- read.csv("https://raw.githubusercontent.com/subugoe/r-recipes/master/f1000_reviews/f1000_reviews.csv", header = TRUE, sep = ",")
+
+# subset of reviews
+nrev <- F1000_reviews %>% filter(!is.na(Review.Title)) %>% group_by(Review.Title) %>% select(Review.Title) %>% summarize(n = n()) %>% mutate(perc = round(n/sum(n) * 100, 2))
+#nrev
+nrev_df <- as.data.frame(nrev)
+#sum(nrev_df$n)
+# reviews with DOIs
+nrevdoi <- F1000_reviews %>% select(Review.DOI) %>% unique()
+# related research article DOIs
+ndoi <- F1000_reviews %>% select(doi) %>% unique()
+
+# reviews - filter out author responses
+F1000_rev <- F1000_reviews %>% filter(!is.na(Review.Status)) 
+# summary of review status
+F1000_rev %>% group_by(Review.Status) %>% select(Review.Status) %>% summarize(n = n()) %>% mutate(perc = round(n/sum(n) * 100, 2))
+F1000_rev_df <- as.data.frame(F1000_rev)
+
+# reviews per article with doi
+# 234 reviews - no information about related article DOI available, leave them out
+revrec <- F1000_reviews %>% filter(!is.na(Review.Title) & !is.na(doi)) %>% group_by(doi) %>% select(doi) %>% dplyr::summarize(n = n()) %>% arrange(desc(n))
+
+# WOR reviews via parsing Europe PMC 
+WOR_reviews <- read.csv("https://raw.githubusercontent.com/gitti1/WOR/master/data/WOR_reviews.csv", header = TRUE, sep = ",")
+
+# WOR reviews - filter out author responses
+WOR_rev <- WOR_reviews %>% filter(!is.na(Review.Status)) 
+# summarize review status
+WOR_rev %>% group_by(Review.Status) %>% select(Review.Status) %>% summarize(n = n()) %>% mutate(perc = round(n/sum(n) * 100, 2))
+WOR_rev_df <- as.data.frame(WOR_rev)
+
+
+```
+Based on a retrieval of all F1000Research research articles that have been indexed in Europe PMC we consider `r sum(nrev_df$n)` records of review articles which are related to `r nrow(ndoi)` records of research articles. For these articles review status information was parsed from the Europe PMC website (Jahn, 2018). About three out of four reports approved (`r F1000_rev_df$n[1]` articles, `r F1000_rev_df$perc[1]`%), nearly one out of four reports approved with reservations (`r F1000_rev_df$n[2]` articles, `r F1000_rev_df$perc[2]`%) and only `r  F1000_rev_df$perc[3]` percent (`r F1000_rev_df$n[3]` reviews) rejected the research article under review. Research articles have received between `r as.numeric(min(revrec$n))` and `r as.numeric(max(revrec$n))` reviews, on average `r round(mean(revrec$n, na.rm = TRUE), 1)` reviews. 
+
+Similarly, information on `r nrow(WOR_rev)` review reports was parsed for all `r length(unique(WOR_reviews$pmcid))` WOR articles which are available on Europe PMC. In addition there were `r nrow(WOR_reviews) - nrow(WOR_rev)` author responses. The distribution is very similar to the above: over 3/4 approved, nearly 1/4 approved with reservations and less than 1% rejected the article under review. 
+
+## Duration between article versions 
+We compare the time between submission dates between the first and the second version of the article by article type, and similarly for publication dates. 
+
+```{r sub_versions, echo=FALSE, warning = FALSE}
+# new variable: stem of doi without version info
+WOR_new <- as.tibble(WOR_new) %>% mutate(doi_stem = str_sub(doi, end=-3))
+
+subdate_v12 <- WOR_new %>% select(doi_stem, Article.Type, Version.Number, Submission.date) %>% mutate(Submission.date = as.Date(Submission.date, "%d/%m/%Y"))
+v <- "Version.Number"
+sub <- "Submission.date"
+subdate_v12 <- subdate_v12 %>% spread_(v, sub) %>% filter(!is.na("1"))
+subdiff_v12 <- subdate_v12 %>% rename(subrev1 = "1", subrev2 = "2", subrev3 = "3") %>% mutate(d12 = subrev2 - subrev1, d23 = subrev3 - subrev2) 
+
+subdiff_v12 %>% group_by(Article.Type) %>% summarise(n = n(), n12 = sum(!is.na(d12)), median12 = median(d12, na.rm = TRUE), sd12 = round(sd(d12, na.rm = TRUE), 2), n23 = sum(!is.na(d23)), median23 = median(d23, na.rm = TRUE)) 
+
+#subdiff_v12 %>%   ggplot(aes(d12)) + labs(title = "Time between submission of version 1 and 2", x = "Article type", y = "Days") + coord_flip() + geom_boxplot(outlier.shape=NA) + geom_jitter(shape=16, position=position_jitter(0.1))
+
+# compare with publication dates
+pubdate_v12 <- WOR_new %>% select(doi_stem, Article.Type, Version.Number, Published) %>% mutate(Published = as.Date(Published, "%d/%m/%Y"))
+v <- "Version.Number"
+pub <- "Published"
+pubdate_v12 <- pubdate_v12 %>% spread_(v, pub) %>% filter(!is.na("1"))
+pubdiff_v12 <- pubdate_v12 %>% rename(pubrev1 = "1", pubrev2 = "2", pubrev3 = "3") %>% mutate(d12 = pubrev2 - pubrev1, d23 = pubrev3 - pubrev2) 
+
+pubdiff_v12 %>% group_by(Article.Type) %>% summarise(n = n(), n12 = sum(!is.na(d12)), median12 = median(d12, na.rm = TRUE), sd12 = round(sd(d12, na.rm = TRUE), 2), n23 = sum(!is.na(d23)), median23 = median(d23, na.rm = TRUE)) 
+
+```
+
+
+## Todos (mostly done)
+* Unnest information (author names, ORCIDs, ...) - done
+* Fetch missing information on author names via rorcid - only if needed
+* Assign gender via gender, genderizeR and compare results (gender is sufficient as it encloses a method "genderize") - done
+* Compute days from submission to publication, to first review, etc. and compare by publication type - done
+* Join first author dataset with gender dataset and compare time differences etc. - done
+* Check how many articles are available on Europe PMC (via R europepmc package) - done
+* Add citation information (e.g. via Europe PMC data) - done
+* Referee status across all review reports - data is incomplete, manually collect information based on a small sample - done
+* WOR review reports and status for all articles available on Europe PMC - done
+* Time from submission of first version to submission of second version (subset of 47 articles) - done
+* Aggregate social media uptake across all versions - done
+* Compare revisions rates: approved vs. approved with reservations vs. rejected (e.g. all reports approved vs. at least one report suggests revisions or rejects)
+
+
+## References
+
+* Baby Name Guesser. Database. Available at: http://www.gpeters.com/names/baby-names.php
+
+* Chamberlain, S., Boettiger, C., Hart, T., Ram, K. (2017). rcrossref: Client for Various ‘CrossRef’ ‘APIs’. R package version 0.7.0. https://CRAN.R-project.org/package=rcrossref
+
+* Hengel, E. (2017, December). Publishing while female: Are women held to higher standards? Evidence from peer review. Available at: http://www.erinhengel.com/research/publishing_female.pdf
+
+* Jahn, N., Salmon, M. (2017). europepmc: R Interface to the Europe PubMed Central RESTful Web Service. R package version 0.2. https://cran.r-project.org/web/packages/europepmc/index.html 
+
+* Jahn, N. (2017a). Introducing europepmc, an R interface to Europe PMC RESTful API. Version of 11 December 2017. Available at: https://ropensci.github.io/europepmc/articles/introducing-europepmc.html
+
+* Jahn, N. (2017b). R script for retrieving DOIs, event and altmetrics. Available at:  https://gist.github.com/njahn82/a6ce300b00de5e218bbf3efb4e0a5e36
+
+* Jahn, N. (2018). R script for retrieving review metadata for F1000 journal articles. Available at: https://github.com/subugoe/r-recipes/blob/master/f1000_reviews/f1000_reviews.Rmd
+
+* Kiley, R. (2017a). Wellcome Open Research: first year in numbers. Wellcome Open Research Blog, 16 November 2017. Available at: https://blog.wellcomeopenresearch.org/2017/11/16/wellcome-open-research-first-year-in-numbers/
+
+* Kiley, R. (2017b). Wellcome Open Research - publication data year 1 (Nov 2016-Nov 2017). Wellcome Trust. doi: https://doi.org/10.6084/m9.figshare.5639197.v2
+Retrieved on 28 November 2017.
+
+* Mullen, L., Blevins, C., Schmidt, B. (2015). Package `gender´. Predict Gender from Names Using Historical Data. R package version 0.5.1. https://cran.r-project.org/web/packages/gender/gender.pdf
+
+* Ram, K. (2017). rAltmetric: Retrieves altmerics data for any
+published paper from altmetrics.com. R package version 0.7. http://CRAN.R-project.org/package=rAltmetric
+
+* Vines, T. (2013, March 27). How rigorous is the post-publication review process at F1000 Research? Available at: https://scholarlykitchen.sspnet.org/2013/03/27/how-rigorous-is-the-post-publication-review-process-at-f1000-research/
+
+
