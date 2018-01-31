@@ -1,6 +1,5 @@
 # WOR
-Wellcome Open Research - Exploration of year one data
-
+Wellcome Open Research - Exploration of year one data 
 
 We investigate the publication metadata and related events on the Wellcome Open Research (WOR) publication platform, and consider all 192 publications which have been submitted between 17 October 2016 and 17 November 2017. The exploration is based on the following datasets:
 
@@ -12,4 +11,4 @@ We investigate the publication metadata and related events on the Wellcome Open 
 
 For a summary on key aspects of the WOR dataset also compare Kiley (2017a). Our analysis offers some additional insights.
 
-For the references please consult the report. 
+For the references please consult the dynamic report here: https://gitti1.github.io/WOR/ 
